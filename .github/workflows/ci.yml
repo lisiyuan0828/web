@@ -5,6 +5,9 @@ on:
   push:
     branches: [ "main", "develop" ]
 
+env:
+  IMAGE_REPO: ccr.ccs.tencentyun.com/4web/frontend
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -14,14 +17,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set environment and image repo
+    - name: Set environment
       run: |
         if [ "$GITHUB_REF" = "refs/heads/main" ]; then
           echo "NAMESPACE=prod" >> $GITHUB_ENV
-          echo "IMAGE_REPO=ccr.ccs.tencentyun.com/4web/frontend" >> $GITHUB_ENV
+          echo "BUILD_ENV=production" >> $GITHUB_ENV  # ← 构建环境变量
         else
           echo "NAMESPACE=staging" >> $GITHUB_ENV
-          echo "IMAGE_REPO=ccr.ccs.tencentyun.com/4web/frontend-develop" >> $GITHUB_ENV
+          echo "BUILD_ENV=staging" >> $GITHUB_ENV     # ← 构建环境变量
         fi
         echo "IMAGE_TAG=${GITHUB_REF#refs/heads/}-${GITHUB_SHA::8}" >> $GITHUB_ENV
 
@@ -31,18 +34,9 @@ jobs:
 
     - name: Build and Push Image
       run: |
-        docker build -t ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} .
+        # 传递 BUILD_ENV 参数给 Docker 构建
+        docker build \
+          --build-arg ENVIRONMENT=${{ env.BUILD_ENV }} \
+          -t ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} \
+          .
         docker push ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
-
-    - name: Configure kubectl
-      run: |
-        curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl
-        chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-        pip3 install tencentcloud-cli
-        tencentcloud tke DescribeClusterKubeconfig --ClusterId "${{ secrets.TKE_CLUSTER_ID }}" --Output kubectl > ~/.kube/config
-
-    - name: Update Deployment
-      run: |
-        # 注意：Deployment 名称在 prod 和 staging 命名空间中都是 "frontend"
-        kubectl set image deployment/frontend frontend=${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} -n ${{ env.NAMESPACE }}
-        kubectl rollout status deployment/frontend -n ${{ env.NAMESPACE }}
