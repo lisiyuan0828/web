@@ -28,6 +28,15 @@ const config = {
 }
 
 // 验证配置
+console.log('🔍 环境变量检查：')
+console.log(`   环境: ${env}`)
+console.log(`   Bucket Key: ${bucketEnvKey}`)
+console.log(`   COS_SECRET_ID: ${config.SecretId ? '已设置 ✓' : '未设置 ✗'}`)
+console.log(`   COS_SECRET_KEY: ${config.SecretKey ? '已设置 ✓' : '未设置 ✗'}`)
+console.log(`   ${bucketEnvKey}: ${config.Bucket || '未设置 ✗'}`)
+console.log(`   COS_REGION: ${config.Region || '未设置 ✗'}`)
+console.log('')
+
 if (!config.SecretId || !config.SecretKey || !config.Bucket || !config.Region) {
   console.error('❌ 缺少 COS 配置，请检查环境变量：')
   console.error(`   COS_SECRET_ID, COS_SECRET_KEY, ${bucketEnvKey}, COS_REGION`)
@@ -59,7 +68,18 @@ const files = glob.sync('**/*', {
   dot: true
 })
 
+if (files.length === 0) {
+  console.error('❌ dist 目录为空或不存在！')
+  console.error(`   检查路径: ${distDir}`)
+  process.exit(1)
+}
+
 console.log(`📊 找到 ${files.length} 个文件`)
+console.log('📄 文件列表:')
+files.slice(0, 10).forEach(f => console.log(`   - ${f}`))
+if (files.length > 10) {
+  console.log(`   ... 还有 ${files.length - 10} 个文件`)
+}
 console.log('')
 
 let uploaded = 0
