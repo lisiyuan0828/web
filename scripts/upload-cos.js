@@ -61,21 +61,21 @@ console.log(`🪣 COS Bucket: ${config.Bucket}`)
 console.log(`📍 COS Region: ${config.Region}`)
 console.log('')
 
-// 获取所有文件
-const files = glob.sync('**/*', {
+// 获取所有文件（只上传 assets 目录）
+const files = glob.sync('assets/**/*', {
   cwd: distDir,
   nodir: true,
   dot: true
 })
 
 if (files.length === 0) {
-  console.error('❌ dist 目录为空或不存在！')
-  console.error(`   检查路径: ${distDir}`)
+  console.error('❌ assets 目录为空或不存在！')
+  console.error(`   检查路径: ${distDir}/assets`)
   process.exit(1)
 }
 
-console.log(`📊 找到 ${files.length} 个文件`)
-console.log('📄 文件列表:')
+console.log(`📊 找到 ${files.length} 个静态资源文件`)
+console.log('📄 文件列表（前10个）:')
 files.slice(0, 10).forEach(f => console.log(`   - ${f}`))
 if (files.length > 10) {
   console.log(`   ... 还有 ${files.length - 10} 个文件`)
@@ -137,13 +137,17 @@ async function uploadAll() {
 uploadAll()
   .then(() => {
     console.log('')
-    console.log('🎉 上传完成！')
+    console.log('🎉 静态资源上传完成！')
     console.log(`✅ 成功: ${uploaded} 个文件`)
     if (failed > 0) {
       console.log(`❌ 失败: ${failed} 个文件`)
     }
     console.log('')
-    console.log(`🌐 访问地址: https://${config.Bucket}.cos.${config.Region}.myqcloud.com/${cosPrefix}index.html`)
+    const cdnDomain = env === 'test' ? 'static-test.poplap.cn' : 'static.poplap.cn'
+    console.log(`🌐 CDN 访问地址: https://${cdnDomain}/${cosPrefix}`)
+    console.log('')
+    console.log('📝 下一步：部署 index.html 到 Nginx')
+    console.log(`   文件位置: ${distDir}/index.html`)
     console.log('')
   })
   .catch((err) => {
