@@ -1,4 +1,4 @@
-name: Deploy to COS
+name: Deploy Frontend
 
 on:
   push:
@@ -6,8 +6,11 @@ on:
       - main      # 生产环境
       - develop   # 测试环境
 
+env:
+  IMAGE_REPO: ccr.ccs.tencentyun.com/4web/frontend
+
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     
     steps:
@@ -26,10 +29,15 @@ jobs:
         if [ "${{ github.ref }}" == "refs/heads/main" ]; then
           echo "ENV_NAME=prod" >> $GITHUB_OUTPUT
           echo "BUILD_MODE=prod" >> $GITHUB_OUTPUT
+          echo "NAMESPACE=prod" >> $GITHUB_OUTPUT
+          echo "BUILD_ENV=production" >> $GITHUB_OUTPUT
         else
           echo "ENV_NAME=test" >> $GITHUB_OUTPUT
           echo "BUILD_MODE=test" >> $GITHUB_OUTPUT
+          echo "NAMESPACE=staging" >> $GITHUB_OUTPUT
+          echo "BUILD_ENV=staging" >> $GITHUB_OUTPUT
         fi
+        echo "IMAGE_TAG=${GITHUB_REF#refs/heads/}-${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
 
     - name: Install dependencies
       run: npm ci
@@ -37,6 +45,44 @@ jobs:
     - name: Build project
       run: npm run build:${{ steps.env.outputs.BUILD_MODE }}
       
+    # 上传构建产物供后续 job 使用
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist-${{ steps.env.outputs.ENV_NAME }}
+        path: dist/
+        retention-days: 1
+
+    outputs:
+      env_name: ${{ steps.env.outputs.ENV_NAME }}
+      build_mode: ${{ steps.env.outputs.BUILD_MODE }}
+      namespace: ${{ steps.env.outputs.NAMESPACE }}
+      build_env: ${{ steps.env.outputs.BUILD_ENV }}
+      image_tag: ${{ steps.env.outputs.IMAGE_TAG }}
+
+  # Job 1: 上传静态资源到 COS
+  upload-to-cos:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: dist-${{ needs.build.outputs.env_name }}
+        path: dist/
+
+    - name: Install COS SDK
+      run: npm install cos-nodejs-sdk-v5 dotenv glob mime-types
+
     - name: Upload to COS
       env:
         COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
@@ -44,16 +90,52 @@ jobs:
         COS_BUCKET_TEST: ${{ secrets.COS_BUCKET_TEST }}
         COS_BUCKET_PROD: ${{ secrets.COS_BUCKET_PROD }}
         COS_REGION: ${{ secrets.COS_REGION }}
-      run: node scripts/upload-cos.js ${{ steps.env.outputs.ENV_NAME }}
+      run: node scripts/upload-cos.js ${{ needs.build.outputs.env_name }}
 
-    - name: Deployment summary
+    - name: COS deployment summary
       run: |
-        echo "🎉 部署成功！"
-        echo "📦 环境: ${{ steps.env.outputs.ENV_NAME }}"
-        if [ "${{ steps.env.outputs.ENV_NAME }}" == "test" ]; then
+        echo "🎉 静态资源上传到 COS 成功！"
+        echo "📦 环境: ${{ needs.build.outputs.env_name }}"
+        if [ "${{ needs.build.outputs.env_name }}" == "test" ]; then
           echo "🪣 Bucket: test-web-1259441138"
-          echo "🌐 访问地址: https://test-web-1259441138.cos.${{ secrets.COS_REGION }}.myqcloud.com/web/index.html"
+          echo "🌐 CDN 地址: https://static-test.poplap.cn/web/"
         else
           echo "🪣 Bucket: prod-web-1259441138"
-          echo "🌐 访问地址: https://prod-web-1259441138.cos.${{ secrets.COS_REGION }}.myqcloud.com/web/index.html"
+          echo "🌐 CDN 地址: https://static.poplap.cn/web/"
         fi
+
+  # Job 2: 构建 Docker 镜像（只包含 index.html）
+  build-docker:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: dist-${{ needs.build.outputs.env_name }}
+        path: dist/
+
+    - name: Login to TCR
+      run: |
+        echo "${{ secrets.TCR_PASSWORD }}" | docker login ccr.ccs.tencentyun.com -u "${{ secrets.TCR_USERNAME }}" --password-stdin
+
+    - name: Build and Push Docker Image
+      run: |
+        docker build \
+          --build-arg ENVIRONMENT=${{ needs.build.outputs.build_env }} \
+          -t ${{ env.IMAGE_REPO }}:${{ needs.build.outputs.image_tag }} \
+          -t ${{ env.IMAGE_REPO }}:${{ needs.build.outputs.namespace }}-latest \
+          .
+        docker push ${{ env.IMAGE_REPO }}:${{ needs.build.outputs.image_tag }}
+        docker push ${{ env.IMAGE_REPO }}:${{ needs.build.outputs.namespace }}-latest
+
+    - name: Docker deployment summary
+      run: |
+        echo "🎉 Docker 镜像构建成功！"
+        echo "📦 环境: ${{ needs.build.outputs.namespace }}"
+        echo "🏷️  镜像标签: ${{ needs.build.outputs.image_tag }}"
+        echo "🐳 镜像地址: ${{ env.IMAGE_REPO }}:${{ needs.build.outputs.image_tag }}"
